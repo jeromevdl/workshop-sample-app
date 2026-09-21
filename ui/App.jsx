@@ -1,17 +1,11 @@
 import { useEffect, useState } from 'react';
+import { api } from './api.js';
+import { timeLabel, formatConflictMessage } from './conflict.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
-const timeLabel = (value) => value.slice(11, 16);
 const dateLabel = (value) => new Date(`${value}T12:00:00Z`).toLocaleDateString('en', {
   weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
 });
-
-async function api(path, options) {
-  const response = await fetch(`/api${path}`, options);
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? 'Unable to complete the request.');
-  return body;
-}
 
 function RoomSketch({ capacity }) {
   const chairs = capacity === 4 ? 2 : capacity === 8 ? 3 : 4;
@@ -26,13 +20,13 @@ function RoomSketch({ capacity }) {
 
 function BookingForm({ room, date, onBooked }) {
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState([]);
 
   async function submit(event) {
     event.preventDefault();
     const form = event.currentTarget;
     const fields = new FormData(form);
-    setError('');
+    setErrors([]);
     setSaving(true);
     try {
       const booking = await api('/bookings', {
@@ -49,7 +43,13 @@ function BookingForm({ room, date, onBooked }) {
       form.reset();
       onBooked(booking);
     } catch (error) {
-      setError(error.message);
+      if (error.status === 409 && error.conflicts?.length > 0) {
+        setErrors(error.conflicts.map((conflict) => formatConflictMessage(room.name, conflict)));
+        form.elements.namedItem('startTime').value = '';
+        form.elements.namedItem('endTime').value = '';
+      } else {
+        setErrors([error.message]);
+      }
     } finally {
       setSaving(false);
     }
@@ -67,24 +67,26 @@ function BookingForm({ room, date, onBooked }) {
         <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
           <label className="field-label">
             Meeting title
-            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} />
+            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} data-testid="booking-form-title-input" />
           </label>
           <label className="field-label">
             Organizer
-            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" />
+            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" data-testid="booking-form-organizer-input" />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field-label">
               Start time
-              <input name="startTime" type="time" defaultValue="09:00" step="60" required />
+              <input name="startTime" type="time" defaultValue="09:00" step="60" required data-testid="booking-form-start-time-input" />
             </label>
             <label className="field-label">
               End time
-              <input name="endTime" type="time" defaultValue="10:00" step="60" required />
+              <input name="endTime" type="time" defaultValue="10:00" step="60" required data-testid="booking-form-end-time-input" />
             </label>
           </div>
-          {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
-          <button className="book-button" type="submit">
+          {errors.map((message, index) => (
+            <p key={index} role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800" data-testid="booking-form-error">{message}</p>
+          ))}
+          <button className="book-button" type="submit" data-testid="booking-form-submit-button">
             {saving ? 'Booking…' : 'Confirm booking'} <span aria-hidden="true">↗</span>
           </button>
         </fieldset>
