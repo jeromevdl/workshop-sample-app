@@ -4,6 +4,16 @@ export class ValidationError extends Error {
   status = 400;
 }
 
+export class ConflictError extends Error {
+  status = 409;
+  conflicts;
+
+  constructor(message, conflicts) {
+    super(message);
+    this.conflicts = conflicts;
+  }
+}
+
 function requireRoom(store, roomId) {
   if (!store.rooms.some((room) => room.id === roomId)) {
     throw new ValidationError('Choose an existing room.');
@@ -34,6 +44,17 @@ export function listBookings(store, roomId, date) {
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
+function findOverlappingBookings(store, roomId, startTime, endTime) {
+  return store.bookings
+    .filter((booking) => booking.roomId === roomId && booking.startTime < endTime && startTime < booking.endTime)
+    .map((booking) => ({
+      existingStart: booking.startTime,
+      existingEnd: booking.endTime,
+      overlapStart: booking.startTime > startTime ? booking.startTime : startTime,
+      overlapEnd: booking.endTime < endTime ? booking.endTime : endTime,
+    }));
+}
+
 export function createBooking(store, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('Provide a booking object.');
@@ -48,6 +69,10 @@ export function createBooking(store, input) {
   const endTime = parseTimestamp(input.endTime);
   if (startTime >= endTime) {
     throw new ValidationError('End time must be after start time.');
+  }
+  const conflicts = findOverlappingBookings(store, input.roomId, startTime, endTime);
+  if (conflicts.length > 0) {
+    throw new ConflictError('This room is already booked for part of the requested time.', conflicts);
   }
   const booking = {
     id: randomUUID(),
