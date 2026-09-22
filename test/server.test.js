@@ -110,6 +110,54 @@ test('parser errors preserve the JSON error contract', async (t) => {
   assert.deepEqual(await oversized.json(), { error: 'Request body is too large.' });
 });
 
+test('a direct API request that overlaps an existing booking receives 409 with structured conflict data', async (t) => {
+  const request = await setup(t);
+  const created = await request('/api/bookings', post(booking));
+  const existing = await created.json();
+  const overlapping = await request('/api/bookings', post({
+    ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z',
+  }));
+  assert.equal(overlapping.status, 409);
+  assert.deepEqual(await overlapping.json(), {
+    error: 'This room is already booked for part of the requested time.',
+    conflicts: [
+      {
+        existingStart: existing.startTime,
+        existingEnd: existing.endTime,
+        overlapStart: '2030-06-12T09:30:00.000Z',
+        overlapEnd: '2030-06-12T10:00:00.000Z',
+      },
+    ],
+  });
+  const listed = await request('/api/bookings?roomId=cedar&date=2030-06-12');
+  assert.deepEqual(await listed.json(), [existing]);
+});
+
+test('a direct API request overlapping two existing bookings receives every conflict', async (t) => {
+  const request = await setup(t);
+  const first = await (await request('/api/bookings', post({
+    ...booking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T09:30:00Z',
+  }))).json();
+  const second = await (await request('/api/bookings', post({
+    ...booking, startTime: '2030-06-12T09:45:00Z', endTime: '2030-06-12T10:15:00Z',
+  }))).json();
+  const response = await request('/api/bookings', post({
+    ...booking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T10:15:00Z',
+  }));
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.conflicts.length, 2);
+  assert.deepEqual(body.conflicts.map((conflict) => conflict.existingStart), [first.startTime, second.startTime]);
+});
+
+test('non-conflict error responses have no conflicts key', async (t) => {
+  const request = await setup(t);
+  const response = await request('/api/bookings', post({ ...booking, endTime: booking.startTime }));
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body), ['error']);
+});
+
 test('routes remain case-sensitive, exact, and limited to their supported methods', async (t) => {
   const request = await setup(t);
   assert.equal((await request('/api/Rooms')).status, 404);
